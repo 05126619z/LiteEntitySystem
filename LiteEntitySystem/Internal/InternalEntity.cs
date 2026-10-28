@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 namespace LiteEntitySystem.Internal
 {
@@ -323,12 +324,17 @@ namespace LiteEntitySystem.Internal
                 return;
             if (IsServer)
             {
-                if (rpc.Flags.HasFlagFast(ExecuteFlags.ExecuteOnServer))
+                if (rpc.Flags.HasFlagFast(ExecuteFlags.ExecuteOnServer) || rpc.Flags.HasFlagFast(ExecuteFlags.SendToServer))
                     rpc.CachedAction(this);
                 ServerManager.AddRemoteCall(null, this, rpc.Id, rpc.Flags);
             }
-            else if (rpc.Flags.HasFlagFast(ExecuteFlags.ExecuteOnPrediction) && IsLocalControlled)
-                rpc.CachedAction(this);
+            else if (IsLocalControlled)
+            {
+                if (rpc.Flags.HasFlagFast(ExecuteFlags.SendToServer))
+                    ClientManager.AddServerCall(this, rpc.Id, ReadOnlySpan<byte>.Empty);
+                if (rpc.Flags.HasFlagFast(ExecuteFlags.ExecuteOnPrediction))
+                    rpc.CachedAction(this);
+            }
         }
 
         protected void ExecuteRPC<T>(in RemoteCall<T> rpc, T value) where T : unmanaged
@@ -337,15 +343,23 @@ namespace LiteEntitySystem.Internal
                 return;
             if (IsServer)
             {
-                if (rpc.Flags.HasFlagFast(ExecuteFlags.ExecuteOnServer))
+                if (rpc.Flags.HasFlagFast(ExecuteFlags.ExecuteOnServer) || rpc.Flags.HasFlagFast(ExecuteFlags.SendToServer))
                     rpc.CachedAction(this, value);
                 unsafe
                 {
                     ServerManager.AddRemoteCall(null, this, new ReadOnlySpan<T>(&value, 1), rpc.Id, rpc.Flags);
                 }
             }
-            else if (rpc.Flags.HasFlagFast(ExecuteFlags.ExecuteOnPrediction) && IsLocalControlled)
-                rpc.CachedAction(this, value);
+            else if (IsLocalControlled)
+            {
+                if (rpc.Flags.HasFlagFast(ExecuteFlags.SendToServer))
+                    unsafe
+                    {
+                        ClientManager.AddServerCall(this, rpc.Id, new ReadOnlySpan<byte>(&value, sizeof(T)));
+                    }
+                if (rpc.Flags.HasFlagFast(ExecuteFlags.ExecuteOnPrediction))
+                    rpc.CachedAction(this, value);
+            }
         }
 
         protected void ExecuteRPC<T>(in RemoteCallSpan<T> rpc, ReadOnlySpan<T> value) where T : unmanaged
@@ -354,12 +368,17 @@ namespace LiteEntitySystem.Internal
                 return;
             if (IsServer)
             {
-                if (rpc.Flags.HasFlagFast(ExecuteFlags.ExecuteOnServer))
+                if (rpc.Flags.HasFlagFast(ExecuteFlags.ExecuteOnServer) || rpc.Flags.HasFlagFast(ExecuteFlags.SendToServer))
                     rpc.CachedAction(this, value);
                 ServerManager.AddRemoteCall(null, this, value, rpc.Id, rpc.Flags);
             }
-            else if (rpc.Flags.HasFlagFast(ExecuteFlags.ExecuteOnPrediction) && IsLocalControlled)
-                rpc.CachedAction(this, value);
+            else if (IsLocalControlled)
+            {
+                if (rpc.Flags.HasFlagFast(ExecuteFlags.SendToServer))
+                    ClientManager.AddServerCall(this, rpc.Id, MemoryMarshal.AsBytes(value));
+                if (rpc.Flags.HasFlagFast(ExecuteFlags.ExecuteOnPrediction))
+                    rpc.CachedAction(this, value);
+            }
         }
 
         protected void ExecuteRPC<T>(in RemoteCallSerializable<T> rpc, T value) where T : struct, ISpanSerializable
@@ -368,14 +387,23 @@ namespace LiteEntitySystem.Internal
                 return;
             if (IsServer)
             {
-                if (rpc.Flags.HasFlagFast(ExecuteFlags.ExecuteOnServer))
+                if (rpc.Flags.HasFlagFast(ExecuteFlags.ExecuteOnServer) || rpc.Flags.HasFlagFast(ExecuteFlags.SendToServer))
                     rpc.CachedAction(this, value);
                 var writer = new SpanWriter(stackalloc byte[value.MaxSize]);
                 value.Serialize(ref writer);
                 ServerManager.AddRemoteCall<byte>(null, this, writer.RawData.Slice(0, writer.Position), rpc.Id, rpc.Flags);
             }
-            else if (rpc.Flags.HasFlagFast(ExecuteFlags.ExecuteOnPrediction) && IsLocalControlled)
-                rpc.CachedAction(this, value);
+            else if (IsLocalControlled)
+            {
+                if (rpc.Flags.HasFlagFast(ExecuteFlags.SendToServer))
+                {
+                    var writer = new SpanWriter(stackalloc byte[value.MaxSize]);
+                    value.Serialize(ref writer);
+                    ClientManager.AddServerCall(this, rpc.Id, writer.RawData.Slice(0, writer.Position));
+                }
+                if (rpc.Flags.HasFlagFast(ExecuteFlags.ExecuteOnPrediction))
+                    rpc.CachedAction(this, value);
+            }
         }
 
         protected InternalEntity(EntityParams entityParams)

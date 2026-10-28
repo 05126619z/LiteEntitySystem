@@ -231,7 +231,7 @@ namespace LiteEntitySystem
         {
             if (!remoteCallHandle.Initialized)
                 remoteCallHandle = new RemoteCall(e => methodToCall((TEntity)e), (ushort)_calls.Count, flags);
-            _calls.Add(new RpcFieldInfo(RemoteCall.CreateMCD(methodToCall)));
+            _calls.Add(new RpcFieldInfo(RemoteCall.CreateMCD(methodToCall), flags, 0));
         }
         
         /// <summary>
@@ -245,7 +245,7 @@ namespace LiteEntitySystem
         {
             if (!remoteCallHandle.Initialized)
                 remoteCallHandle = new RemoteCall<T>((e, v) => methodToCall((TEntity)e, v), (ushort)_calls.Count, flags);
-            _calls.Add(new RpcFieldInfo(RemoteCall<T>.CreateMCD(methodToCall)));
+            _calls.Add(new RpcFieldInfo(RemoteCall<T>.CreateMCD(methodToCall), flags, Utils.SizeOfStruct<T>()));
         }
 
         /// <summary>
@@ -259,7 +259,7 @@ namespace LiteEntitySystem
         {
             if (!remoteCallHandle.Initialized)
                 remoteCallHandle = new RemoteCallSpan<T>((e,v) => methodToCall((TEntity)e, v), (ushort)_calls.Count, flags);
-            _calls.Add(new RpcFieldInfo(RemoteCallSpan<T>.CreateMCD(methodToCall)));
+            _calls.Add(new RpcFieldInfo(RemoteCallSpan<T>.CreateMCD(methodToCall), flags, -1));
         }
         
         /// <summary>
@@ -275,7 +275,7 @@ namespace LiteEntitySystem
         {
             if (!remoteCallHandle.Initialized)
                 remoteCallHandle = new RemoteCallSerializable<T>((e,v) => methodToCall((TEntity)e, v), (ushort)_calls.Count, flags);
-            _calls.Add(new RpcFieldInfo(RemoteCallSerializable<T>.CreateMCD(methodToCall)));
+            _calls.Add(new RpcFieldInfo(RemoteCallSerializable<T>.CreateMCD(methodToCall), flags, -1));
         }
     }
 

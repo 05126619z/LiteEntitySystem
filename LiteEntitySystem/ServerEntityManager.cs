@@ -30,6 +30,18 @@ namespace LiteEntitySystem
         ThirdOfFPS = 3
     }
 
+    internal readonly struct PendingServerCall
+    {
+        public readonly ServerCallHeader Header;
+        public readonly byte[] Data;
+
+        public PendingServerCall(ServerCallHeader header, byte[] data)
+        {
+            Header = header;
+            Data = data;
+        }
+    }
+
     internal readonly struct PendingClientRequest
     {
         public readonly byte[] RequestData;
@@ -48,6 +60,9 @@ namespace LiteEntitySystem
     public sealed class ServerEntityManager : EntityManager
     {
         public const int MaxStoredInputs = 30;
+
+        /// <summary>Client to server rpcs a player may have waiting; more are dropped.</summary>
+        public const int MaxPendingServerCalls = 256;
         
         private readonly IdGeneratorUShort _entityIdQueue = new(1, MaxSyncedEntityCount);
         private readonly IdGeneratorByte _playerIdQueue = new(1, MaxPlayers);
@@ -389,6 +404,9 @@ namespace LiteEntitySystem
             byte packetType = inData[0];
             inData = inData.Slice(1);
             
+            if (packetType == InternalPackets.ClientRPC)
+                return ReadServerCalls(player, inData);
+
             if (packetType == InternalPackets.ClientRequest)
             {
                 if (inData.Length < HumanControllerLogic.MinRequestSize)
@@ -557,6 +575,80 @@ namespace LiteEntitySystem
                 _stateSerializers[e.Id].MakeDestroyedRPC(_tick);
         }
 
+        private DeserializeResult ReadServerCalls(NetPlayer player, ReadOnlySpan<byte> inData)
+        {
+            while (inData.Length > 0)
+            {
+                if (inData.Length < ServerCallHeader.Size)
+                {
+                    Logger.LogError($"Bad client rpc from: {player.Id} - {player.Peer} header cut");
+                    return DeserializeResult.Error;
+                }
+                var header = inData.ReadStruct<ServerCallHeader>();
+                inData = inData.Slice(ServerCallHeader.Size);
+                if (header.ByteCount > inData.Length)
+                {
+                    Logger.LogError($"Bad client rpc from: {player.Id} - {player.Peer} data cut");
+                    return DeserializeResult.Error;
+                }
+                if (player.ServerCalls.Count >= MaxPendingServerCalls)
+                    Logger.LogWarning($"Client rpc from: {player.Id} dropped, {MaxPendingServerCalls} already waiting");
+                else
+                    player.ServerCalls.Enqueue(new PendingServerCall(header, inData.Slice(0, header.ByteCount).ToArray()));
+                inData = inData.Slice(header.ByteCount);
+            }
+            return DeserializeResult.Done;
+        }
+
+        /// <summary>
+        /// Runs the player's client rpcs whose tick input is processed (after that input, before entity updates).
+        /// Only <see cref="ExecuteFlags.SendToServer"/> rpcs of entities the player owns are run.
+        /// </summary>
+        private void ExecuteServerCalls(NetPlayer player)
+        {
+            if (player.State != NetPlayerState.Active)
+                return;
+            while (player.ServerCalls.Count > 0 &&
+                   Utils.SequenceDiff(player.ServerCalls.Peek().Header.Tick, player.LastProcessedTick) <= 0)
+            {
+                var call = player.ServerCalls.Dequeue();
+                var header = call.Header;
+                if (!TryGetEntityById<InternalEntity>(new EntitySharedReference(header.EntityId, header.EntityVersion), out var entity) ||
+                    entity.IsDestroyed)
+                    continue; //destroyed meanwhile
+                if (entity.InternalOwnerId.Value != player.Id)
+                {
+                    Logger.LogWarning($"Client rpc from: {player.Id} on {entity}, which it doesn't own");
+                    continue;
+                }
+                var rpcs = ClassDataDict[entity.ClassId].RemoteCallsClient;
+                if (rpcs == null || header.RpcId >= rpcs.Length)
+                {
+                    Logger.LogWarning($"Client rpc from: {player.Id} on {entity}: no rpc {header.RpcId}");
+                    continue;
+                }
+                var rpc = rpcs[header.RpcId];
+                if (rpc.SyncableOffset != -1 || !rpc.Flags.HasFlagFast(ExecuteFlags.SendToServer))
+                {
+                    Logger.LogWarning($"Client rpc from: {player.Id} on {entity}: rpc {header.RpcId} isn't SendToServer");
+                    continue;
+                }
+                if (rpc.DataSize >= 0 && rpc.DataSize != call.Data.Length)
+                {
+                    Logger.LogWarning($"Client rpc from: {player.Id} on {entity}: rpc {header.RpcId} got {call.Data.Length} bytes, expects {rpc.DataSize}");
+                    continue;
+                }
+                try
+                {
+                    rpc.Method(entity, call.Data);
+                }
+                catch (Exception e)
+                {
+                    Logger.LogError($"Client rpc from: {player.Id} on {entity}: rpc {header.RpcId} failed: {e}");
+                }
+            }
+        }
+
         protected override unsafe void OnLogicTick()
         {
             //read pending client requests
@@ -593,6 +685,8 @@ namespace LiteEntitySystem
                 if (player.AvailableInput.Count == 0)
                 {
                     //Logger.LogWarning($"Inputs of player {pidx} is zero");
+                    //calls for ticks already processed don't wait for more input
+                    ExecuteServerCalls(player);
                     continue;
                 }
                 
@@ -609,6 +703,7 @@ namespace LiteEntitySystem
                         continue;
                     controller.ApplyIncomingInput(inputFrame.Tick);
                 }
+                ExecuteServerCalls(player);
             }
 
             //update entities

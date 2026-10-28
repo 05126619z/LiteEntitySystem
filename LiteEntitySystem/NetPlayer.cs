@@ -57,6 +57,9 @@ namespace LiteEntitySystem
         internal DateTime ServerTickChangedTime;
         internal readonly Queue<RemoteCallPacket> PendingRPCs;
         internal int PendingRPCSize;
+
+        /// <summary>Client to server rpcs received from this player, in send order, waiting for their tick's input.</summary>
+        internal readonly Queue<PendingServerCall> ServerCalls;
         
         internal NetPlayer(AbstractNetPeer peer, byte id)
         {
@@ -71,6 +74,7 @@ namespace LiteEntitySystem
             EntitySyncInfo = new();
             State = NetPlayerState.RequestBaseline;
             PendingRPCs = new();
+            ServerCalls = new();
         }
 
         internal void LoadInputInfo(InputPacketHeader inputData)

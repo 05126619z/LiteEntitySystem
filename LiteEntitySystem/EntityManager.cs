@@ -45,7 +45,15 @@ namespace LiteEntitySystem
         SyncGroup4          = 1 << 7,
         
         ///<summary>Toggleable sync group 5. Can include SyncVars and RPCs.</summary>
-        SyncGroup5          = 1 << 8
+        SyncGroup5          = 1 << 8,
+
+        ///<summary>
+        /// Client to server RPC. Called on the client that owns the entity, it is sent reliably to the server, stamped
+        /// with the client tick, and executed there after that tick's input (before entity updates).
+        /// Called on the server it executes directly. Combine with <see cref="ExecuteOnPrediction"/> to also run it on the
+        /// owner client right away (and again on rollback resimulation if called from Update; only the first call is sent).
+        ///</summary>
+        SendToServer        = 1 << 9
     }
 
     public enum NetworkMode

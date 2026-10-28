@@ -128,6 +128,9 @@ namespace LiteEntitySystem
         private readonly SequenceBinaryHeap<ServerStateData> _readyStates = new(MaxSavedStateDiff);
         private readonly Queue<PredictableEntityLogic> _tempLocalEntities = new ();
         private readonly byte[] _sendBuffer = new byte[NetConstants.MaxPacketSize];
+        //client to server rpcs of this frame: header byte, packet type, then ServerCallHeader + args per call
+        private byte[] _serverCalls = new byte[256];
+        private int _serverCallsSize;
         private readonly byte[] _zeroFieldBuffer = new byte[StateSerializer.MaxStateSize];
         private readonly HashSet<InternalEntity> _changedEntities = new();
         private readonly CircularBuffer<InputInfo> _storedInputHeaders = new(InputBufferSize);
@@ -250,6 +253,7 @@ namespace LiteEntitySystem
             _readyStates.Clear();
             _syncCallsCount = 0;
             _entitiesToRemoveCount = 0;
+            _serverCallsSize = 0;
         }
         
         /// <summary>
@@ -779,6 +783,7 @@ namespace LiteEntitySystem
             //send buffered input
             if (_tick != _prevTick)
                 SendBufferedInput();
+            SendServerCalls();
             
             if (_stateB != null)
             {
@@ -813,6 +818,52 @@ namespace LiteEntitySystem
             return syncVar.Container.IsLocalControlled
                 ? typeProcessor.GetInterpolatedValue(interpValue, syncVar.Value, LerpFactor)
                 : typeProcessor.GetInterpolatedValue(syncVar.Value, interpValue, _remoteLerpFactor);
+        }
+
+        /// <summary>
+        /// Queues a <see cref="ExecuteFlags.SendToServer"/> rpc of an entity this client controls, stamped with the tick
+        /// whose input it goes with (the current one inside a logic tick, the next one between ticks). Rollback
+        /// resimulation only repeats calls that were already sent, so they are skipped.
+        /// </summary>
+        internal unsafe void AddServerCall(InternalEntity entity, ushort rpcId, ReadOnlySpan<byte> data)
+        {
+            if (InRollBackState)
+                return;
+            if (data.Length > ushort.MaxValue)
+            {
+                Logger.LogError($"Client rpc {rpcId} of {entity} is too big: {data.Length} bytes");
+                return;
+            }
+            if (_serverCallsSize == 0)
+                _serverCallsSize = 2;
+            int required = _serverCallsSize + ServerCallHeader.Size + data.Length;
+            if (required > _serverCalls.Length)
+                Array.Resize(ref _serverCalls, Math.Max(required, _serverCalls.Length * 2));
+            fixed (byte* calls = _serverCalls)
+            {
+                *(ServerCallHeader*)(calls + _serverCallsSize) = new ServerCallHeader
+                {
+                    Tick = _tick,
+                    EntityId = entity.Id,
+                    EntityVersion = entity.Version,
+                    RpcId = rpcId,
+                    ByteCount = (ushort)data.Length
+                };
+            }
+            _serverCallsSize += ServerCallHeader.Size;
+            data.CopyTo(new Span<byte>(_serverCalls, _serverCallsSize, data.Length));
+            _serverCallsSize += data.Length;
+        }
+
+        /// <summary>The frame's client to server rpcs, in one reliable ordered packet.</summary>
+        private void SendServerCalls()
+        {
+            if (_serverCallsSize == 0)
+                return;
+            _serverCalls[0] = HeaderByte;
+            _serverCalls[1] = InternalPackets.ClientRPC;
+            _netPeer.SendReliableOrdered(new ReadOnlySpan<byte>(_serverCalls, 0, _serverCallsSize));
+            _serverCallsSize = 0;
         }
 
         private unsafe void SendBufferedInput()

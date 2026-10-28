@@ -23,16 +23,34 @@ namespace LiteEntitySystem.Internal
         public readonly int SyncableOffset;
         public readonly MethodCallDelegate Method;
 
+        /// <summary>Flags the rpc was created with; the server checks <see cref="ExecuteFlags.SendToServer"/> on client calls.</summary>
+        public readonly ExecuteFlags Flags;
+
+        /// <summary>Exact argument size in bytes, or -1 when it varies (spans, serializables).</summary>
+        public readonly int DataSize;
+
         public RpcFieldInfo(MethodCallDelegate method)
         {
             SyncableOffset = -1;
             Method = method;
+            Flags = ExecuteFlags.None;
+            DataSize = -1;
+        }
+
+        public RpcFieldInfo(MethodCallDelegate method, ExecuteFlags flags, int dataSize)
+        {
+            SyncableOffset = -1;
+            Method = method;
+            Flags = flags;
+            DataSize = dataSize;
         }
         
         public RpcFieldInfo(int syncableOffset, MethodCallDelegate method)
         {
             SyncableOffset = syncableOffset;
             Method = method;
+            Flags = ExecuteFlags.None;
+            DataSize = -1;
         }
     }
 
